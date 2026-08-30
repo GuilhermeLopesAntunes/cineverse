@@ -1,0 +1,281 @@
+model User {
+  id           Int               @id @default(autoincrement())
+  email        String            @unique
+  name         String?
+  passwordHash String
+  createdAt    TimestamptzString @default(now())
+}
+
+model UserProfile {
+  id     Int  @id @default(autoincrement())
+  userId Int  @unique
+  user   User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+// One row per (user, genre) instead of a scalar list column — Prisma Next's
+// SQL interpreter rejects scalar list columns (e.g. String[]) outright, and
+// this shape is what actually lets the stated purpose (feed personalization)
+// query "who likes genre X" later without unpacking a blob.
+model FavoriteGenre {
+  id     Int    @id @default(autoincrement())
+  userId Int
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  genre  String
+
+  @@unique([userId, genre])
+}
+
+// Populated/refreshed by the TMDB sync job (BE-11), not written directly by
+// user-facing requests — the point is to never make a request wait on
+// TMDB's latency/availability (ARQUITETURA_BACKEND.md § 7).
+model Movie {
+  id        Int               @id @default(autoincrement())
+  tmdbId    Int               @unique
+  title     String
+  synopsis  String?
+  posterUrl String?
+  cachedAt  TimestamptzString @default(now())
+  // Vem do `release_date` do TMDB (BE-11 já recebia esse valor mas
+  // descartava-o). Nullable porque o TMDB às vezes devolve "" para filmes
+  // sem data anunciada. É a partir daqui que o cliente deriva "em cartaz" /
+  // "lançamento" / "em breve" — nenhuma dessas categorias é armazenada como
+  // status próprio, só a data real.
+  releaseDate TimestamptzString?
+}
+
+// MVP has exactly one pilot partner (CLAUDE.md), but it's still its own
+// table rather than a global singleton — Room/Session already need a real FK
+// to hang off of, and a second partner is a documented phase-2 item, not a
+// hypothetical.
+model CinemaPartner {
+  id        Int               @id @default(autoincrement())
+  name      String
+  // Shape intentionally undefined until the real gateway (BE-20/21) exists —
+  // this MVP only ever talks to MockPartnerGateway.
+  apiConfig String?
+  // Straight-line coordinates for BE-14's nearest-partner search. Not part
+  // of the original ARQUITETURA_BACKEND.md CinemaPartner shape — RF-07
+  // (busca hiperlocal) can't work without a partner location, and there's
+  // no separate "Location" entity documented, so it lives here.
+  latitude  Float
+  longitude Float
+  createdAt TimestamptzString @default(now())
+}
+
+model Room {
+  id        Int           @id @default(autoincrement())
+  partnerId Int
+  partner   CinemaPartner @relation(fields: [partnerId], references: [id], onDelete: Cascade)
+  name      String
+
+  @@unique([partnerId, name])
+}
+
+model Seat {
+  id     Int    @id @default(autoincrement())
+  roomId Int
+  room   Room   @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  code   String // e.g. "A1", "B12"
+
+  @@unique([roomId, code])
+}
+
+model Session {
+  id         Int               @id @default(autoincrement())
+  movieId    Int
+  movie      Movie             @relation(fields: [movieId], references: [id])
+  roomId     Int
+  room       Room              @relation(fields: [roomId], references: [id])
+  datetime   TimestamptzString
+  priceCents Int // integer cents, not a float — see BE-27+ (payments)
+}
+
+// hasSpoiler exists as a column from the start (matches the documented
+// entity shape) even though BE-15 doesn't act on it yet — obfuscating
+// spoiler content on read is BE-16's job, not a second migration on the
+// same table.
+model Review {
+  id         Int               @id @default(autoincrement())
+  userId     Int
+  user       User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  movieId    Int
+  movie      Movie             @relation(fields: [movieId], references: [id])
+  text       String
+  rating     Int // 1-5, enforced at the DTO level
+  hasSpoiler Boolean           @default(false)
+  createdAt  TimestamptzString @default(now())
+}
+
+// `type` is a plain String ("individual" | "group"), not an enum — same call
+// as `hasSpoiler`'s rating range: this Prisma Next contract's enum support
+// is unproven territory (scalar list columns are already a documented no,
+// see below), so the constraint is enforced at the DTO level instead
+// (CreateChatRoomDto's @IsIn) rather than risking `contract emit` rejecting
+// an untested PSL feature.
+model ChatRoom {
+  id        Int               @id @default(autoincrement())
+  type      String
+  createdAt TimestamptzString @default(now())
+}
+
+model ChatRoomMember {
+  id     Int      @id @default(autoincrement())
+  roomId Int
+  room   ChatRoom @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  userId Int
+  user   User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([roomId, userId])
+}
+
+model Message {
+  id        Int               @id @default(autoincrement())
+  roomId    Int
+  room      ChatRoom          @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  senderId  Int
+  sender    User              @relation(fields: [senderId], references: [id], onDelete: Cascade)
+  content   String
+  createdAt TimestamptzString @default(now())
+}
+
+// Owned entirely by MockPartnerGateway (BE-21) — simulates the partner's
+// own seat-sale records, independent of this app's own SeatLock (Redis,
+// BE-23). A row only exists once a seat has been touched for that session;
+// no row means "available" by convention (see MockPartnerGateway.ensureState).
+// `status` is a String, not an enum — same reasoning as ChatRoom.type.
+model PartnerSeatState {
+  id          Int               @id @default(autoincrement())
+  sessionId   Int
+  session     Session           @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  seatId      Int
+  seat        Seat              @relation(fields: [seatId], references: [id], onDelete: Cascade)
+  status      String // "available" | "locked" | "sold"
+  // Set once status = "sold" — lets confirmSale recognize a repeat call for
+  // the *same* order as a safe no-op (idempotent) instead of a conflict.
+  soldOrderId Int?
+  updatedAt   TimestamptzString @default(now())
+
+  @@unique([sessionId, seatId])
+}
+
+// Created "pending" the moment checkout starts (BE-24) — the seat hold
+// itself is still the Redis lock (BE-23), not this row; this is the
+// purchase record that lock eventually turns into once payment confirms
+// (ARQUITETURA_BACKEND.md § 5, still BE-27+). `status` is a String, not an
+// enum — same reasoning as ChatRoom.type/PartnerSeatState.status.
+model Order {
+  id               Int               @id @default(autoincrement())
+  userId           Int
+  user             User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  sessionId        Int
+  session          Session           @relation(fields: [sessionId], references: [id])
+  status           String // "pending" for now — "paid"/"cancelled"/"expired" are BE-27+
+  totalAmountCents Int // integer cents, not a float — same convention as Session.priceCents
+  createdAt        TimestamptzString @default(now())
+}
+
+// One row per seat in the order — an "individual" checkout (BE-24) and a
+// "group" one (BE-25) are the same shape here: a single buyer, one Order,
+// N OrderItems. Nothing about this table is specific to seat count.
+model OrderItem {
+  id          Int        @id @default(autoincrement())
+  orderId     Int
+  order       Order      @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  seatId      Int
+  seat        Seat       @relation(fields: [seatId], references: [id])
+  // Optional, per seat — different people in the same group order can pick
+  // different combos (or none). Added in BE-26; nullable from the start
+  // rather than a separate migration since the column was already
+  // documented as coming (see the BE-24 comment in ARQUITETURA_BACKEND.md).
+  comboItemId Int?
+  comboItem   ComboItem? @relation(fields: [comboItemId], references: [id])
+
+  @@unique([orderId, seatId])
+}
+
+// Each partner has its own combo menu (MVP has one partner, but the shape
+// doesn't assume that — same reasoning as CinemaPartner itself). `price` in
+// the architecture doc's original shape is `priceCents` here, same integer-
+// cents convention as Session.priceCents/Order.totalAmountCents.
+model ComboItem {
+  id         Int           @id @default(autoincrement())
+  partnerId  Int
+  partner    CinemaPartner @relation(fields: [partnerId], references: [id], onDelete: Cascade)
+  name       String
+  priceCents Int
+}
+
+// One row per payment attempt on an Order — MVP allows exactly one per
+// Order (PaymentsService rejects a second one), so retry/multi-attempt
+// flows are a documented non-goal for now, not an oversight. `method` is a
+// String, not an enum — same reasoning as ChatRoom.type/PartnerSeatState.status
+// (only "pix" is accepted today; "apple_pay"/"google_pay"/"card" are
+// BE-28/29 — enforced at the DTO level, not the schema). `status` starts
+// "pending" and is flipped by the Pix webhook (`POST /payments/webhook/pix`)
+// — the *full* idempotent webhook that also converts the seat lock and
+// triggers ticket generation is BE-30's job; this one only updates
+// Payment/Order status.
+model Payment {
+  id          Int               @id @default(autoincrement())
+  orderId     Int
+  order       Order             @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  method      String // "pix" for now
+  providerRef String            @unique
+  status      String // "pending" | "paid" | "failed"
+  createdAt   TimestamptzString @default(now())
+}
+
+// One per OrderItem (one seat, one ticket) — generated by
+// `PaymentsService.settlePaidOrder` (BE-30) once a payment confirms, for
+// every payment method. `qrCodePayload` IS the QR code's content — a signed
+// JWT (TicketsService, HS256 over TICKET_QR_SECRET), not a bare sequential
+// id, so a ticket can't be forged just by guessing/incrementing an id
+// (ARQUITETURA_BACKEND.md § 3: "evita ingresso forjado"). It doubles as the
+// lookup key (`@unique`) for the validation endpoint (RNF-12, BE-33): verify
+// the signature first (rejects a forged/garbage code without ever touching
+// the DB), then a single indexed lookup by the exact payload string — no
+// joins needed. `status` starts "valid"; BE-33 flips it to "used" on
+// redemption.
+model Ticket {
+  id            Int                @id @default(autoincrement())
+  orderItemId   Int                @unique
+  orderItem     OrderItem          @relation(fields: [orderItemId], references: [id], onDelete: Cascade)
+  qrCodePayload String             @unique
+  status        String // "valid" | "used"
+  usedAt        TimestamptzString?
+  createdAt     TimestamptzString  @default(now())
+}
+
+// One row per (user, device) — a user can have several devices, each with
+// its own FCM registration token (RF-17). `token` is `@unique`, not
+// `userId`+`platform`: a physical device keeps the same FCM token across
+// app restarts, but that token can legitimately move to a different
+// `userId` (logout on device A, a different user logs in on that same
+// device) — `PushTokensService.register` (BE-34) treats re-registering an
+// existing token as an ownership transfer, not a duplicate/conflict.
+model PushToken {
+  id        Int               @id @default(autoincrement())
+  userId    Int
+  user      User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  token     String            @unique
+  platform  String // "ios" | "android"
+  createdAt TimestamptzString @default(now())
+}
+
+// One row per reminder actually sent, keyed by (user, session) — not by
+// order/seat, since RF-17 wants exactly one notification per user per
+// session no matter how many seats they bought for it. This is the guard
+// against re-sending: `SessionReminderService.sendDueReminders` (BE-35)
+// runs on a recurring job tick, so a session sitting inside the reminder
+// window across several ticks would otherwise notify the same buyer over
+// and over.
+model SessionReminder {
+  id        Int               @id @default(autoincrement())
+  userId    Int
+  user      User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  sessionId Int
+  session   Session           @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  sentAt    TimestamptzString @default(now())
+
+  @@unique([userId, sessionId])
+}

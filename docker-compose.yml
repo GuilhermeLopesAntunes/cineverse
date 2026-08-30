@@ -1,0 +1,72 @@
+services:
+  api:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: nestjs_api
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      # Variáveis que o NestJS usará para conectar ao banco e ao Redis
+      - DATABASE_URL=postgresql://usuario_nest:senha_nest@db:5432/banco_nest?schema=public
+      - REDIS_URL=redis://redis:6379
+      # Secrets de dev apenas — nunca usar estes valores em produção.
+      - JWT_ACCESS_SECRET=dev-only-access-secret-change-me
+      - JWT_ACCESS_EXPIRES_IN=15m
+      - JWT_REFRESH_SECRET=dev-only-refresh-secret-change-me
+      - JWT_REFRESH_EXPIRES_IN=7d
+    depends_on:
+      db:
+        condition: service_healthy # Aguarda o Postgres estar totalmente pronto
+      redis:
+        condition: service_healthy # Aguarda o Redis responder ao PING
+    networks:
+      - nest_network
+    volumes:
+      - ./backend:/usr/src/app
+      - /usr/src/app/node_modules
+
+  db:
+    image: postgres:15-alpine
+    container_name: postgres_db
+    restart: always
+    environment:
+      POSTGRES_USER: usuario_nest
+      POSTGRES_PASSWORD: senha_nest
+      POSTGRES_DB: banco_nest
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data # Persiste os dados do Postgres
+    networks:
+      - nest_network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U usuario_nest -d banco_nest"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: redis_cache
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - nest_network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+networks:
+  nest_network:
+    driver: bridge
+
+volumes:
+  postgres_data:
+  redis_data:

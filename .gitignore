@@ -1,0 +1,81 @@
+# ===== Node / NestJS (backend) =====
+node_modules/
+dist/
+build/
+coverage/
+.nyc_output/
+npm-debug.log*
+pnpm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+lerna-debug.log*
+*.tsbuildinfo
+
+# ===== Flutter / Dart (frontend/cineverse) =====
+**/.dart_tool/
+**/.flutter-plugins
+**/.flutter-plugins-dependencies
+**/.pub-cache/
+**/.pub/
+**/doc/api/
+**/migrate_working_dir/
+frontend/cineverse/build/
+
+# Android
+**/android/**/gradle-wrapper.jar
+**/android/.gradle/
+**/android/captures/
+**/android/gradlew
+**/android/gradlew.bat
+**/android/local.properties
+**/android/app/debug/
+**/android/app/profile/
+**/android/app/release/
+**/android/key.properties
+*.jks
+*.keystore
+
+# iOS
+**/ios/Flutter/.last_build_id
+**/ios/Flutter/flutter_export_environment.sh
+**/ios/Pods/
+**/ios/.symlinks/
+**/ios/Flutter/Flutter.framework
+**/ios/Flutter/Flutter.podspec
+**/ios/ServiceDefinitions.json
+*.mode1v3
+*.mode2v3
+*.moved-aside
+*.pbxuser
+*.perspectivev3
+**/xcuserdata/
+
+# Web
+frontend/cineverse/web/manifest.json.bak
+
+# Symbolication/obfuscation
+app.*.symbols
+app.*.map.json
+
+# ===== Env / secrets =====
+.env
+.env.*
+!.env.example
+
+# ===== Editors / IDEs =====
+.idea/
+*.iml
+*.ipr
+*.iws
+.vscode/*
+!.vscode/extensions.json
+*.swp
+.DS_Store
+Thumbs.db
+
+# ===== Claude Code local settings =====
+.claude/settings.local.json
+
+# ===== Logs =====
+*.log
+logs/

@@ -1,0 +1,159 @@
+### Massa de dados para desenvolvimento — CineVerse
+### O backend não tem seed (ver CLAUDE.md § Massa de dados). Todos os
+### endpoints abaixo exigem apenas um JWT válido, sem papel de administrador
+### (simplificação de MVP do backend). Filmes chegam sozinhos via job de
+### sincronização do TMDB — não precisam ser criados aqui.
+###
+### Uso (VS Code + extensão "REST Client", ou copie os comandos curl
+### equivalentes): rode na ordem, de cima para baixo, substituindo os ids
+### capturados nas respostas anteriores.
+
+@baseUrl = http://localhost:3000/api/v1
+
+### 1. Registrar um usuário de teste (ou use um que já exista)
+POST {{baseUrl}}/auth/register
+Content-Type: application/json
+
+{
+  "email": "dev@cineverse.local",
+  "password": "devpassword123"
+}
+
+### 2. Login — copie o accessToken da resposta para os próximos passos
+POST {{baseUrl}}/auth/login
+Content-Type: application/json
+
+{
+  "email": "dev@cineverse.local",
+  "password": "devpassword123"
+}
+
+@token = COLE_O_ACCESS_TOKEN_AQUI
+
+### 3. Criar um cinema parceiro (coordenadas de exemplo: São Paulo/SP)
+### distanceKm em GET /sessions/nearby é calculado a partir daqui.
+### findNearest percorre todos os parceiros e devolve só o mais próximo —
+### com um único parceiro, qualquer localização do dispositivo cai nele; a
+### seção 9 abaixo cria mais 3, cada um "vencendo" perto de coordenadas
+### diferentes, pra variar o resultado dependendo de onde o app roda.
+POST {{baseUrl}}/partners
+Content-Type: application/json
+Authorization: Bearer {{token}}
+
+{
+  "name": "Cine Demo",
+  "latitude": -23.5505,
+  "longitude": -46.6333
+}
+
+@partnerId = COLE_O_ID_AQUI
+
+### 4. Criar uma sala nesse parceiro
+POST {{baseUrl}}/partners/{{partnerId}}/rooms
+Content-Type: application/json
+Authorization: Bearer {{token}}
+
+{
+  "name": "Sala 1"
+}
+
+@roomId = COLE_O_ID_AQUI
+
+### 5. Criar assentos na sala (código no padrão que core/utils/seat_code.dart espera)
+POST {{baseUrl}}/rooms/{{roomId}}/seats
+Content-Type: application/json
+Authorization: Bearer {{token}}
+
+{
+  "codes": ["A1", "A2", "A3", "A4", "A5", "B1", "B2", "B3", "B4", "B5"]
+}
+
+### 6. Criar uma sessão futura — troque "movieId" por um id real de
+### GET /catalog/movies (o job do TMDB precisa já ter rodado)
+POST {{baseUrl}}/sessions
+Content-Type: application/json
+Authorization: Bearer {{token}}
+
+{
+  "movieId": 1,
+  "roomId": {{roomId}},
+  "datetime": "2026-12-31T20:00:00.000Z",
+  "priceCents": 3200
+}
+
+### 7. Criar combos para o parceiro
+POST {{baseUrl}}/partners/{{partnerId}}/combos
+Content-Type: application/json
+Authorization: Bearer {{token}}
+
+{
+  "name": "Pipoca + Refrigerante",
+  "priceCents": 2500
+}
+
+###
+POST {{baseUrl}}/partners/{{partnerId}}/combos
+Content-Type: application/json
+Authorization: Bearer {{token}}
+
+{
+  "name": "Combo Casal",
+  "priceCents": 4500
+}
+
+### 8. Conferir: deve devolver o parceiro e a sessão criados
+GET {{baseUrl}}/sessions/nearby?lat=-23.5505&lng=-46.6333
+Authorization: Bearer {{token}}
+
+###
+### 9. Mais cinemas — só um parceiro deixava a tela "Cinema mais próximo"
+### muito vazia (1 filme, 1 sessão). Repita os passos 4-7 para cada parceiro
+### abaixo (nome + coordenadas), com salas de 5 fileiras x 8 poltronas
+### (codes A1..E8), ~8 sessões espalhadas nos próximos dias usando ids reais
+### de GET /catalog/movies, e 2 combos. O script usado para gerar isso de
+### uma vez (via Node, chamando os mesmos endpoints) fica fora do controle
+### de versão — esta seção documenta o resultado para poder refazer à mão.
+POST {{baseUrl}}/partners
+Content-Type: application/json
+Authorization: Bearer {{token}}
+
+{
+  "name": "CineVerse Paulista",
+  "latitude": -23.5613,
+  "longitude": -46.6565
+}
+
+###
+POST {{baseUrl}}/partners
+Content-Type: application/json
+Authorization: Bearer {{token}}
+
+{
+  "name": "CineVerse Vila Olímpia",
+  "latitude": -23.5955,
+  "longitude": -46.6890
+}
+
+###
+POST {{baseUrl}}/partners
+Content-Type: application/json
+Authorization: Bearer {{token}}
+
+{
+  "name": "CineVerse Pinheiros",
+  "latitude": -23.5670,
+  "longitude": -46.7010
+}
+
+### Conferir a variedade: cada coordenada abaixo deve devolver um parceiro
+### diferente, cada um com suas próprias 8 sessões.
+GET {{baseUrl}}/sessions/nearby?lat=-23.5613&lng=-46.6565
+Authorization: Bearer {{token}}
+
+###
+GET {{baseUrl}}/sessions/nearby?lat=-23.5955&lng=-46.6890
+Authorization: Bearer {{token}}
+
+###
+GET {{baseUrl}}/sessions/nearby?lat=-23.5670&lng=-46.7010
+Authorization: Bearer {{token}}
